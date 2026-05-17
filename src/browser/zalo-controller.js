@@ -73,25 +73,37 @@ async function _checkLoginState() {
   }
 }
 
+// Capture QR từ DOM và emit — gọi được nhiều lần
+async function _captureAndEmitQR() {
+  if (!_io || !page) return;
+  try {
+    const qrEl = await page.$(SEL.qrImage);
+    if (!qrEl) return;
+    const buf = await qrEl.screenshot({ type: 'png' });
+    _io.emit('qr_ready', { qr: `data:image/png;base64,${buf.toString('base64')}` });
+    console.log('[qr] captured and emitted');
+  } catch (err) {
+    console.error('[qr] capture failed:', err.message);
+  }
+}
+
 async function _waitForQRAndEmit() {
   if (!_io) return;
   try {
     await page.waitForSelector(SEL.qrImage, { timeout: 15000 });
-    const qrEl = await page.$(SEL.qrImage);
-    if (!qrEl) return;
-
-    const qrBase64 = await qrEl.screenshot({ type: 'png' });
-    _io.emit('qr_ready', { qr: `data:image/png;base64,${qrBase64.toString('base64')}` });
+    await _captureAndEmitQR();
   } catch (err) {
     console.error('[zalo-controller] QR not found:', err.message);
   }
 }
 
 async function _waitForLoginSuccess() {
-  // Poll until chat list appears (user scanned QR)
-  const maxWait = 120_000;
-  const interval = 2_000;
-  let elapsed = 0;
+  const maxWait   = 300_000;  // 5 phút
+  const checkMs   =   2_000;  // poll login mỗi 2s
+  const qrRefreshMs = 45_000; // refresh QR mỗi 45s (Zalo expire ~60s)
+  let elapsed      = 0;
+  let lastRefresh  = 0;
+
   while (elapsed < maxWait) {
     const ok = await _checkLoginState();
     if (ok) {
@@ -99,10 +111,17 @@ async function _waitForLoginSuccess() {
       _io?.emit('logged_in', { username });
       return;
     }
-    await page.waitForTimeout(interval);
-    elapsed += interval;
+
+    // Re-capture QR trước khi nó expire
+    if (elapsed - lastRefresh >= qrRefreshMs) {
+      await _captureAndEmitQR();
+      lastRefresh = elapsed;
+    }
+
+    await page.waitForTimeout(checkMs);
+    elapsed += checkMs;
   }
-  throw new Error('Login timeout — QR not scanned within 2 minutes');
+  throw new Error('Login timeout — QR not scanned within 5 minutes');
 }
 
 async function _getUsername() {
