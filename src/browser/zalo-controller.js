@@ -4,7 +4,9 @@ const session = require('./session');
 // Selectors — verify against live Zalo Web DOM (F12 → inspect)
 const SEL = {
   // QR login screen
-  qrImage:      'img[src*="qr"], canvas[id*="qr"], img[alt*="QR"]',
+  qrImage:      'img[src*="qr"], canvas[id*="qr"], img[alt*="QR"], [class*="qr"] img, [class*="QR"] img',
+  // Button that appears when QR expires — click to get fresh QR
+  qrRefreshBtn: '[class*="reload"], [class*="refresh"], [class*="renew"], [class*="retry"], [class*="qr"] button, [class*="QR"] button',
   // Logged-in chat interface
   chatList:     '.conv-item, [class*="ConvItem"], [class*="conv-item"]',
   chatName:     '[class*="conv-title"], [class*="ConvTitle"]',
@@ -77,10 +79,31 @@ async function _checkLoginState() {
 async function _captureAndEmitQR() {
   if (!_io || !page) return;
   try {
+    // Click nút làm mới nếu QR đã hết hạn (Zalo hiện overlay che QR)
+    const refreshBtn = await page.$(SEL.qrRefreshBtn);
+    if (refreshBtn && await refreshBtn.isVisible()) {
+      await refreshBtn.click();
+      console.log('[qr] clicked refresh button — waiting for new QR');
+      await page.waitForTimeout(1500);
+    }
+
     const qrEl = await page.$(SEL.qrImage);
     if (!qrEl) return;
-    const buf = await qrEl.screenshot({ type: 'png' });
-    _io.emit('qr_ready', { qr: `data:image/png;base64,${buf.toString('base64')}` });
+
+    // Ưu tiên lấy dữ liệu gốc (sắc nét hơn screenshot)
+    const qrData = await page.evaluate((el) => {
+      if (el.tagName === 'IMG') return el.src || null;
+      if (el.tagName === 'CANVAS') return el.toDataURL('image/png');
+      return null;
+    }, qrEl);
+
+    if (qrData && (qrData.startsWith('data:') || qrData.startsWith('http'))) {
+      _io.emit('qr_ready', { qr: qrData });
+    } else {
+      // Fallback: chụp screenshot element
+      const buf = await qrEl.screenshot({ type: 'png' });
+      _io.emit('qr_ready', { qr: `data:image/png;base64,${buf.toString('base64')}` });
+    }
     console.log('[qr] captured and emitted');
   } catch (err) {
     console.error('[qr] capture failed:', err.message);
@@ -100,7 +123,7 @@ async function _waitForQRAndEmit() {
 async function _waitForLoginSuccess() {
   const maxWait   = 300_000;  // 5 phút
   const checkMs   =   2_000;  // poll login mỗi 2s
-  const qrRefreshMs = 45_000; // refresh QR mỗi 45s (Zalo expire ~60s)
+  const qrRefreshMs = 30_000; // refresh QR mỗi 30s (Zalo expire ~60s, bắt trước)
   let elapsed      = 0;
   let lastRefresh  = 0;
 
