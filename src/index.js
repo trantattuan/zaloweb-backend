@@ -39,6 +39,11 @@ io.on('connection', (socket) => {
 });
 
 async function start() {
+  // Start HTTP server immediately so /api/status is reachable during browser init
+  server.listen(PORT, () => {
+    console.log(`[server] listening on http://localhost:${PORT}`);
+  });
+
   console.log('[boot] launching browser...');
   try {
     const page = await controller.initBrowser({ headless: HEADLESS, io });
@@ -46,12 +51,8 @@ async function start() {
     console.log('[boot] browser ready');
   } catch (err) {
     console.error('[boot] browser init failed:', err.message);
-    process.exit(1);
+    // Keep server alive so health checks can report the error
   }
-
-  server.listen(PORT, () => {
-    console.log(`[server] listening on http://localhost:${PORT}`);
-  });
 }
 
 start();
