@@ -31,7 +31,13 @@ async function initBrowser({ headless = false, io } = {}) {
 
   browser = await chromium.launch({
     headless,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',  // critical in Docker: default /dev/shm is too small
+      '--disable-gpu',
+      '--disable-software-rasterizer',
+    ],
   });
 
   context = savedState
