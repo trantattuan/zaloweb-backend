@@ -14,9 +14,9 @@ const FRONTEND  = process.env.FRONTEND_URL || 'http://localhost:3000';
 
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: FRONTEND } });
+const io     = new Server(server, { cors: { origin: '*' } });
 
-app.use(cors({ origin: FRONTEND }));
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 // Routes
@@ -30,9 +30,19 @@ app.get('/api/status', async (req, res) => {
   res.json({ loggedIn, username, uptime: process.uptime() });
 });
 
+// Store latest QR so late-connecting clients still get it
+let _cachedQR = null;
+const _origEmit = io.emit.bind(io);
+io.emit = (event, ...args) => {
+  if (event === 'qr_ready') _cachedQR = args[0];
+  return _origEmit(event, ...args);
+};
+
 // Socket.io
 io.on('connection', (socket) => {
   console.log('[socket] client connected:', socket.id);
+  // Re-emit QR if browser already generated it before this client connected
+  if (_cachedQR) socket.emit('qr_ready', _cachedQR);
   socket.on('disconnect', () => {
     console.log('[socket] client disconnected:', socket.id);
   });
