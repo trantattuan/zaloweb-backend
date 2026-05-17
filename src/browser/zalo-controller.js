@@ -90,7 +90,10 @@ async function _captureAndEmitQR() {
     const qrEl = await page.$(SEL.qrImage);
     if (!qrEl) return;
 
+    // Tăng contrast để màu đen đậm hơn, dễ quét
+    await qrEl.evaluate(el => { el.style.filter = 'contrast(200%) brightness(0.85)'; });
     const buf = await qrEl.screenshot({ type: 'png' });
+    await qrEl.evaluate(el => { el.style.filter = ''; });
     _io.emit('qr_ready', { qr: `data:image/png;base64,${buf.toString('base64')}` });
     console.log('[qr] captured and emitted');
   } catch (err) {
@@ -111,7 +114,7 @@ async function _waitForQRAndEmit() {
 async function _waitForLoginSuccess() {
   const maxWait   = 300_000;  // 5 phút
   const checkMs   =   2_000;  // poll login mỗi 2s
-  const qrRefreshMs = 30_000; // refresh QR mỗi 30s (Zalo expire ~60s, bắt trước)
+  const qrRefreshMs = 60_000; // refresh QR mỗi 60s (Zalo expire 90s, click refresh button kịp thời)
   let elapsed      = 0;
   let lastRefresh  = 0;
 
