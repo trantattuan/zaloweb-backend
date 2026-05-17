@@ -6,7 +6,7 @@ const SEL = {
   // QR login screen
   qrImage:      'img[src*="qr"], canvas[id*="qr"], img[alt*="QR"], [class*="qr"] img, [class*="QR"] img',
   // Button that appears when QR expires — click to get fresh QR
-  qrRefreshBtn: '[class*="reload"], [class*="refresh"], [class*="renew"], [class*="retry"], [class*="qr"] button, [class*="QR"] button',
+  qrRefreshBtn: '.btn.btn--s.docs-creator',
   // Logged-in chat interface
   chatList:     '.conv-item, [class*="ConvItem"], [class*="conv-item"]',
   chatName:     '[class*="conv-title"], [class*="ConvTitle"]',
@@ -90,20 +90,8 @@ async function _captureAndEmitQR() {
     const qrEl = await page.$(SEL.qrImage);
     if (!qrEl) return;
 
-    // Ưu tiên lấy dữ liệu gốc (sắc nét hơn screenshot)
-    const qrData = await page.evaluate((el) => {
-      if (el.tagName === 'IMG') return el.src || null;
-      if (el.tagName === 'CANVAS') return el.toDataURL('image/png');
-      return null;
-    }, qrEl);
-
-    if (qrData && (qrData.startsWith('data:') || qrData.startsWith('http'))) {
-      _io.emit('qr_ready', { qr: qrData });
-    } else {
-      // Fallback: chụp screenshot element
-      const buf = await qrEl.screenshot({ type: 'png' });
-      _io.emit('qr_ready', { qr: `data:image/png;base64,${buf.toString('base64')}` });
-    }
+    const buf = await qrEl.screenshot({ type: 'png' });
+    _io.emit('qr_ready', { qr: `data:image/png;base64,${buf.toString('base64')}` });
     console.log('[qr] captured and emitted');
   } catch (err) {
     console.error('[qr] capture failed:', err.message);
