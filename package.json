@@ -1,0 +1,17 @@
+{
+  "name": "zaloweb-backend",
+  "version": "1.0.0",
+  "description": "Zaloweb backend — Playwright controller for Zalo Web",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "playwright": "^1.44.0",
+    "socket.io": "^4.7.5"
+  }
+}
