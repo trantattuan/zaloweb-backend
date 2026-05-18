@@ -92,6 +92,12 @@ async function pageType(text) {
   await page.keyboard.type(text);
 }
 
+/** Nhấn phím đặc biệt (Enter, Backspace, Tab…) */
+async function pageKey(key) {
+  if (!page) return;
+  await page.keyboard.press(key);
+}
+
 /** Đăng nhập bằng số điện thoại và mật khẩu.
  *  - Trả về ngay (non-blocking): frontend lắng nghe socket logged_in / login_error.
  *  - Stream screenshot để user giải CAPTCHA nếu cần.
@@ -282,6 +288,7 @@ module.exports = {
   loginWithPhone,
   pageClick,
   pageType,
+  pageKey,
   getPage,
   isLoggedIn,
   getUsername,

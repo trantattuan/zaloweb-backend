@@ -36,6 +36,7 @@ io.on('connection', (socket) => {
   // Forward click/type từ frontend về Playwright (giải CAPTCHA)
   socket.on('page_click', ({ x, y }) => controller.pageClick(x, y).catch(() => {}));
   socket.on('page_type',  ({ text }) => controller.pageType(text).catch(() => {}));
+  socket.on('page_key',   ({ key })  => controller.pageKey(key).catch(() => {}));
   socket.on('disconnect', () => {
     console.log('[socket] client disconnected:', socket.id);
   });
