@@ -30,22 +30,29 @@ app.get('/api/status', async (req, res) => {
   res.json({ loggedIn, username, uptime: process.uptime() });
 });
 
-// Store latest QR so late-connecting clients still get it
-let _cachedQR = null;
-const _origEmit = io.emit.bind(io);
-io.emit = (event, ...args) => {
-  if (event === 'qr_ready') _cachedQR = args[0];
-  return _origEmit(event, ...args);
-};
-
 // Socket.io
 io.on('connection', (socket) => {
   console.log('[socket] client connected:', socket.id);
-  // Re-emit QR if browser already generated it before this client connected
-  if (_cachedQR) socket.emit('qr_ready', _cachedQR);
   socket.on('disconnect', () => {
     console.log('[socket] client disconnected:', socket.id);
   });
+});
+
+// POST /api/auth/login — nhận số điện thoại và mật khẩu từ frontend
+app.post('/api/auth/login', async (req, res) => {
+  const { phone, password } = req.body;
+  if (!phone || !password) {
+    return res.status(400).json({ error: 'Thiếu số điện thoại hoặc mật khẩu' });
+  }
+  try {
+    await controller.loginWithPhone(phone, password);
+    const page = await controller.getPage();
+    await watcher.startWatching(page, io);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[login] failed:', err.message);
+    res.status(401).json({ error: err.message });
+  }
 });
 
 async function start() {
@@ -57,11 +64,16 @@ async function start() {
   console.log('[boot] launching browser...');
   try {
     const page = await controller.initBrowser({ headless: HEADLESS, io });
-    await watcher.startWatching(page, io);
-    console.log('[boot] browser ready');
+    // Nếu đã có session → tự vào chat và start watcher
+    const loggedIn = await controller.isLoggedIn();
+    if (loggedIn) {
+      await watcher.startWatching(page, io);
+      console.log('[boot] session restored — browser ready');
+    } else {
+      console.log('[boot] browser ready — chờ đăng nhập qua /api/auth/login');
+    }
   } catch (err) {
     console.error('[boot] browser init failed:', err.message);
-    // Keep server alive so health checks can report the error
   }
 }
 

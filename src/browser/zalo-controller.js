@@ -3,10 +3,12 @@ const session = require('./session');
 
 // Selectors — verify against live Zalo Web DOM (F12 → inspect)
 const SEL = {
-  // QR login screen
-  qrImage:      'img[src*="qr"], canvas[id*="qr"], img[alt*="QR"], [class*="qr"] img, [class*="QR"] img',
-  // Button that appears when QR expires — click to get fresh QR
-  qrRefreshBtn: '.btn.btn--s.docs-creator',
+  // Phone + password login form
+  phoneLoginTab: '[class*="login-tab"][class*="phone"], [class*="phone-login"], a[class*="phone"]',
+  phoneInput:    'input[type="tel"], input[placeholder*="điện thoại"], input[name="phone"], input[autocomplete="tel"]',
+  passwordInput: 'input[type="password"]',
+  loginBtn:      'button[type="submit"], [class*="login-btn"], [class*="btn-login"], [class*="submit"]',
+  loginError:    '[class*="error-msg"], [class*="invalid"], [class*="login-error"]',
   // Logged-in chat interface
   chatList:     '.conv-item, [class*="ConvItem"], [class*="conv-item"]',
   chatName:     '[class*="conv-title"], [class*="ConvTitle"]',
@@ -53,17 +55,54 @@ async function initBrowser({ headless = false, io } = {}) {
     timeout: 30000,
   });
 
-  const loggedIn = await _checkLoginState();
-  if (!loggedIn) {
-    await _waitForQRAndEmit();
-    await _waitForLoginSuccess();
+  return page;
+}
+
+/** Đăng nhập bằng số điện thoại và mật khẩu */
+async function loginWithPhone(phone, password) {
+  if (!page) throw new Error('Browser not initialized');
+
+  // Nếu đã đăng nhập sẵn → bỏ qua
+  const alreadyIn = await _checkLoginState();
+  if (alreadyIn) {
+    const username = await _getUsername();
+    _io?.emit('logged_in', { username });
+    return;
   }
 
-  // Persist session after login
+  // Thử click tab "đăng nhập bằng mật khẩu" nếu có
+  try {
+    const tab = await page.$(SEL.phoneLoginTab);
+    if (tab) { await tab.click(); await page.waitForTimeout(500); }
+  } catch { /* tab không tồn tại — form đã sẵn sàng */ }
+
+  // Điền số điện thoại
+  await page.waitForSelector(SEL.phoneInput, { timeout: 10000 });
+  await page.fill(SEL.phoneInput, phone);
+
+  // Điền mật khẩu
+  await page.waitForSelector(SEL.passwordInput, { timeout: 5000 });
+  await page.fill(SEL.passwordInput, password);
+
+  // Nhấn đăng nhập
+  await page.click(SEL.loginBtn);
+
+  // Chờ vào được giao diện chat
+  try {
+    await page.waitForSelector(SEL.chatList, { timeout: 20000 });
+  } catch {
+    // Kiểm tra có thông báo lỗi không
+    const errEl = await page.$(SEL.loginError);
+    const errMsg = errEl ? await errEl.innerText() : 'Đăng nhập thất bại';
+    throw new Error(errMsg.trim() || 'Đăng nhập thất bại — kiểm tra số điện thoại / mật khẩu');
+  }
+
+  // Lưu session và báo frontend
   const state = await context.storageState();
   session.save(state);
 
-  return page;
+  const username = await _getUsername();
+  _io?.emit('logged_in', { username });
 }
 
 async function _checkLoginState() {
@@ -73,69 +112,6 @@ async function _checkLoginState() {
   } catch {
     return false;
   }
-}
-
-// Capture QR từ DOM và emit — gọi được nhiều lần
-async function _captureAndEmitQR() {
-  if (!_io || !page) return;
-  try {
-    // Click nút làm mới nếu QR đã hết hạn (Zalo hiện overlay che QR)
-    const refreshBtn = await page.$(SEL.qrRefreshBtn);
-    if (refreshBtn && await refreshBtn.isVisible()) {
-      await refreshBtn.click();
-      console.log('[qr] clicked refresh button — waiting for new QR');
-      await page.waitForTimeout(1500);
-    }
-
-    const qrEl = await page.$(SEL.qrImage);
-    if (!qrEl) return;
-
-    // Tăng contrast để màu đen đậm hơn, dễ quét
-    await qrEl.evaluate(el => { el.style.filter = 'contrast(200%) brightness(0.85)'; });
-    const buf = await qrEl.screenshot({ type: 'png' });
-    await qrEl.evaluate(el => { el.style.filter = ''; });
-    _io.emit('qr_ready', { qr: `data:image/png;base64,${buf.toString('base64')}` });
-    console.log('[qr] captured and emitted');
-  } catch (err) {
-    console.error('[qr] capture failed:', err.message);
-  }
-}
-
-async function _waitForQRAndEmit() {
-  if (!_io) return;
-  try {
-    await page.waitForSelector(SEL.qrImage, { timeout: 15000 });
-    await _captureAndEmitQR();
-  } catch (err) {
-    console.error('[zalo-controller] QR not found:', err.message);
-  }
-}
-
-async function _waitForLoginSuccess() {
-  const maxWait   = 300_000;  // 5 phút
-  const checkMs   =   2_000;  // poll login mỗi 2s
-  const qrRefreshMs = 60_000; // refresh QR mỗi 60s (Zalo expire 90s, click refresh button kịp thời)
-  let elapsed      = 0;
-  let lastRefresh  = 0;
-
-  while (elapsed < maxWait) {
-    const ok = await _checkLoginState();
-    if (ok) {
-      const username = await _getUsername();
-      _io?.emit('logged_in', { username });
-      return;
-    }
-
-    // Re-capture QR trước khi nó expire
-    if (elapsed - lastRefresh >= qrRefreshMs) {
-      await _captureAndEmitQR();
-      lastRefresh = elapsed;
-    }
-
-    await page.waitForTimeout(checkMs);
-    elapsed += checkMs;
-  }
-  throw new Error('Login timeout — QR not scanned within 5 minutes');
 }
 
 async function _getUsername() {
@@ -250,6 +226,7 @@ async function closeBrowser() {
 
 module.exports = {
   initBrowser,
+  loginWithPhone,
   getPage,
   isLoggedIn,
   getUsername,
