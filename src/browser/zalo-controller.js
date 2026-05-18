@@ -381,11 +381,15 @@ async function sendMessage(chatId, content) {
 
   await page.waitForTimeout(1000);
   console.log('[sendMessage] waiting for chat input...');
-  await page.waitForSelector(SEL.chatInput, { timeout: 10000 });
+  try {
+    await page.waitForSelector(SEL.chatInput, { timeout: 8000 });
+  } catch {
+    throw new Error('Không tìm thấy ô nhập tin nhắn — hội thoại này có thể là kênh chỉ đọc');
+  }
 
   const input = page.locator(SEL.chatInput).first();
   await input.click();
-  await input.fill(content);   // fill() works better with React contenteditable
+  await input.fill(content);
   console.log('[sendMessage] content filled, pressing Enter...');
   await page.keyboard.press('Enter');
   console.log('[sendMessage] done');
