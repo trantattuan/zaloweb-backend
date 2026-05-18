@@ -29,6 +29,7 @@ let context = null;
 let page    = null;
 let _io     = null;
 let _screenStreamInterval = null;
+let _lastChats = [];  // cache name→id for reliable conv-item lookup
 
 async function initBrowser({ headless = false, io } = {}) {
   _io = io;
@@ -255,7 +256,7 @@ async function getChats() {
   if (!page) return [];
   try {
     await page.waitForSelector(SEL.chatList, { timeout: 5000 });
-    return page.evaluate((sel) => {
+    const chats = await page.evaluate((sel) => {
       const items = [...document.querySelectorAll(sel.chatList)];
       return items.slice(0, 15).map((el, i) => {
         const nameEl    = el.querySelector(sel.chatName);
@@ -269,6 +270,8 @@ async function getChats() {
         };
       });
     }, SEL);
+    _lastChats = chats;
+    return chats;
   } catch (err) {
     console.error('[getChats]', err.message);
     return [];
@@ -279,22 +282,39 @@ async function getChats() {
 async function getMessages(chatId) {
   if (!page) return [];
   try {
-    // Click conversation item bằng Playwright locator (đáng tin hơn DOM click)
     const items = page.locator(SEL.chatList);
     const count = await items.count();
     if (count === 0) return [];
 
-    // Tìm theo data attr trước, fallback về index
+    // Look up name from cache — immune to list reordering
+    const known    = _lastChats.find(c => c.id === chatId);
+    const chatName = known?.name;
+
     let target = null;
-    for (let i = 0; i < count; i++) {
-      const el = items.nth(i);
-      const convId = await el.getAttribute('data-conv-id').catch(() => null);
-      const uid    = await el.getAttribute('data-uid').catch(() => null);
-      if (convId === chatId || uid === chatId) { target = el; break; }
+
+    // Primary: find by name text (stable against Zalo reordering)
+    if (chatName) {
+      const byName = page.locator(SEL.chatList).filter({
+        has: page.locator(SEL.chatName).filter({ hasText: chatName }),
+      });
+      if (await byName.count() > 0) target = byName.first();
     }
+
+    // Fallback 1: data attribute
+    if (!target) {
+      for (let i = 0; i < count; i++) {
+        const el     = items.nth(i);
+        const convId = await el.getAttribute('data-conv-id').catch(() => null);
+        const uid    = await el.getAttribute('data-uid').catch(() => null);
+        if (convId === chatId || uid === chatId) { target = el; break; }
+      }
+    }
+
+    // Fallback 2: numeric index (fragile but last resort)
     if (!target && !isNaN(Number(chatId)) && Number(chatId) < count) {
       target = items.nth(Number(chatId));
     }
+
     if (!target) return [];
 
     await target.click();
@@ -312,7 +332,7 @@ async function getMessages(chatId) {
           id:        el.dataset.msgId || el.dataset.id || String(i),
           content:   contentEl?.innerText?.trim() || el.innerText?.trim() || '',
           sender:    senderEl?.innerText?.trim()  || '',
-          timestamp: el.dataset.ts || String(Date.now()),
+          timestamp: el.dataset.ts || el.dataset.time || el.dataset.msgTime || el.dataset.sendDttm || '',
           fromMe:    el.className.includes('own') || el.className.includes('me') ||
                      el.dataset.fromMe === 'true',
         };
@@ -328,12 +348,23 @@ async function getMessages(chatId) {
 async function sendMessage(chatId, content) {
   if (!page) throw new Error('Browser not initialized');
 
-  // Open the chat
-  await page.evaluate(({ sel, id }) => {
-    const items = Array.from(document.querySelectorAll(sel.chatList));
-    const target = items.find(el => el.dataset.convId === id || el.id === id);
-    target?.click();
-  }, { sel: SEL, id: chatId });
+  // Open the chat — prefer name-based lookup (stable against reordering)
+  const knownForSend = _lastChats.find(c => c.id === chatId);
+  const nameForSend  = knownForSend?.name;
+  let openedByName   = false;
+  if (nameForSend) {
+    const byName = page.locator(SEL.chatList).filter({
+      has: page.locator(SEL.chatName).filter({ hasText: nameForSend }),
+    });
+    if (await byName.count() > 0) { await byName.first().click(); openedByName = true; }
+  }
+  if (!openedByName) {
+    await page.evaluate(({ sel, id }) => {
+      const items = Array.from(document.querySelectorAll(sel.chatList));
+      const target = items.find(el => el.dataset.convId === id || el.id === id);
+      target?.click();
+    }, { sel: SEL, id: chatId });
+  }
 
   await page.waitForSelector(SEL.chatInput, { timeout: 5000 });
   const input = await page.$(SEL.chatInput);
