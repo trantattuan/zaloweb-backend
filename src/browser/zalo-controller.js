@@ -164,9 +164,9 @@ async function loginWithPhone(phone, password) {
   });
 }
 
-async function _checkLoginState() {
+async function _checkLoginState(timeout = 8000) {
   try {
-    await page.waitForSelector(SEL.chatList, { timeout: 5000 });
+    await page.waitForSelector(SEL.chatList, { timeout });
     return true;
   } catch {
     return false;
@@ -279,19 +279,27 @@ async function getChats() {
 async function getMessages(chatId) {
   if (!page) return [];
   try {
-    // Click the matching conversation item
-    const clicked = await page.evaluate(({ sel, id }) => {
-      const items = [...document.querySelectorAll(sel.chatList)];
-      const target = items.find(el =>
-        el.dataset.convId === id || el.dataset.uid === id
-      ) || (!isNaN(Number(id)) ? items[Number(id)] : null);
-      if (target) { target.click(); return true; }
-      return false;
-    }, { sel: SEL, id: chatId });
+    // Click conversation item bằng Playwright locator (đáng tin hơn DOM click)
+    const items = page.locator(SEL.chatList);
+    const count = await items.count();
+    if (count === 0) return [];
 
-    if (!clicked) return [];
-    // Chờ message area xuất hiện — thử scroll container trước rồi mới message frame
-    try { await page.waitForSelector('.message-view__scroll', { timeout: 3000 }); } catch {}
+    // Tìm theo data attr trước, fallback về index
+    let target = null;
+    for (let i = 0; i < count; i++) {
+      const el = items.nth(i);
+      const convId = await el.getAttribute('data-conv-id').catch(() => null);
+      const uid    = await el.getAttribute('data-uid').catch(() => null);
+      if (convId === chatId || uid === chatId) { target = el; break; }
+    }
+    if (!target && !isNaN(Number(chatId)) && Number(chatId) < count) {
+      target = items.nth(Number(chatId));
+    }
+    if (!target) return [];
+
+    await target.click();
+    // Chờ message area xuất hiện
+    try { await page.waitForSelector('.message-view__scroll', { timeout: 4000 }); } catch {}
     await page.waitForTimeout(1500);
 
     await page.waitForSelector(SEL.messageItem, { timeout: 10000 });
