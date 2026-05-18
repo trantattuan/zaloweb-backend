@@ -29,7 +29,15 @@ let context = null;
 let page    = null;
 let _io     = null;
 let _screenStreamInterval = null;
-let _lastChats = [];  // cache name→id for reliable conv-item lookup
+let _lastChats = [];
+
+// Mutex: serialise all Playwright ops so concurrent requests don't fight over the browser
+let _lock = Promise.resolve();
+function _withBrowser(fn) {
+  const p = _lock.then(fn);
+  _lock = p.catch(() => {});  // keep chain alive even if fn throws
+  return p;
+}
 
 async function initBrowser({ headless = false, io } = {}) {
   _io = io;
@@ -252,7 +260,7 @@ async function debugDOM() {
 }
 
 /** Read chat list from sidebar DOM */
-async function getChats() {
+async function _getChatsInner() {
   if (!page) return [];
   try {
     await page.waitForSelector(SEL.chatList, { timeout: 5000 });
@@ -278,8 +286,11 @@ async function getChats() {
   }
 }
 
+async function getChats() { return _withBrowser(_getChatsInner); }
+
 /** Read messages of a conversation — click chat first, then read thread */
 async function getMessages(chatId) {
+  return _withBrowser(async () => {
   if (!page) return [];
   try {
     const items = page.locator(SEL.chatList);
@@ -347,16 +358,18 @@ async function getMessages(chatId) {
     console.error('[getMessages]', err.message);
     return [];
   }
+  }); // end _withBrowser
 }
 
 /** Send a message via Playwright automation */
 async function sendMessage(chatId, content) {
+  return _withBrowser(async () => {
   if (!page) throw new Error('Browser not initialized');
 
-  // Populate cache if empty (e.g. after backend restart)
+  // Populate cache if empty — call inner fn (already inside lock)
   if (_lastChats.length === 0) {
     console.log('[sendMessage] cache empty — fetching chats first');
-    await getChats();
+    await _getChatsInner();
   }
 
   const knownForSend = _lastChats.find(c => c.id === chatId);
@@ -396,6 +409,7 @@ async function sendMessage(chatId, content) {
 
   const state = await context.storageState();
   session.save(state);
+  }); // end _withBrowser
 }
 
 async function closeBrowser() {
