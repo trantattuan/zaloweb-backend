@@ -353,10 +353,17 @@ async function getMessages(chatId) {
 async function sendMessage(chatId, content) {
   if (!page) throw new Error('Browser not initialized');
 
-  // Open the chat — prefer name-based lookup (stable against reordering)
+  // Populate cache if empty (e.g. after backend restart)
+  if (_lastChats.length === 0) {
+    console.log('[sendMessage] cache empty — fetching chats first');
+    await getChats();
+  }
+
   const knownForSend = _lastChats.find(c => c.id === chatId);
   const nameForSend  = knownForSend?.name;
-  let openedByName   = false;
+  console.log('[sendMessage] chatId:', chatId, '| name:', nameForSend || '(not found)');
+
+  let openedByName = false;
   if (nameForSend) {
     const byName = page.locator(SEL.chatList).filter({
       has: page.locator(SEL.chatName).filter({ hasText: nameForSend }),
@@ -364,22 +371,25 @@ async function sendMessage(chatId, content) {
     if (await byName.count() > 0) { await byName.first().click(); openedByName = true; }
   }
   if (!openedByName) {
+    console.log('[sendMessage] name lookup failed — falling back to DOM click');
     await page.evaluate(({ sel, id }) => {
       const items = Array.from(document.querySelectorAll(sel.chatList));
       const target = items.find(el => el.dataset.convId === id || el.id === id);
-      target?.click();
+      if (target) target.click();
     }, { sel: SEL, id: chatId });
   }
 
-  await page.waitForTimeout(800);
-  await page.waitForSelector(SEL.chatInput, { timeout: 8000 });
+  await page.waitForTimeout(1000);
+  console.log('[sendMessage] waiting for chat input...');
+  await page.waitForSelector(SEL.chatInput, { timeout: 10000 });
+
   const input = page.locator(SEL.chatInput).first();
   await input.click();
-  // keyboard.type() triggers input events that contenteditable needs
-  await page.keyboard.type(content);
+  await input.fill(content);   // fill() works better with React contenteditable
+  console.log('[sendMessage] content filled, pressing Enter...');
   await page.keyboard.press('Enter');
+  console.log('[sendMessage] done');
 
-  // Save session after action
   const state = await context.storageState();
   session.save(state);
 }
