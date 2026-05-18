@@ -312,7 +312,7 @@ async function getMessages(chatId) {
           id:        el.dataset.msgId || el.dataset.id || String(i),
           content:   contentEl?.innerText?.trim() || el.innerText?.trim() || '',
           sender:    senderEl?.innerText?.trim()  || '',
-          timestamp: el.dataset.ts || '',
+          timestamp: el.dataset.ts || String(Date.now()),
           fromMe:    el.className.includes('own') || el.className.includes('me') ||
                      el.dataset.fromMe === 'true',
         };
