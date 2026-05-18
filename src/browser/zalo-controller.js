@@ -323,36 +323,26 @@ async function getMessages(chatId) {
     await page.waitForTimeout(1500);
 
     await page.waitForSelector(SEL.messageItem, { timeout: 10000 });
-    const raw = await page.evaluate((sel) => {
+    return page.evaluate((sel) => {
       const msgs = [...document.querySelectorAll(sel.messageItem)];
       return msgs.slice(-10).map((el, i) => {
         const contentEl = el.querySelector(sel.msgContent);
         const senderEl  = el.querySelector(sel.msgSender);
-        // Try many possible time elements Zalo may use
-        const timeEl = el.querySelector(
-          '[class*="msgTime"], [class*="msg-time"], [class*="message__time"], ' +
-          '[class*="message-time"], [class*="time-text"], [class*="timeText"], time'
-        );
-        // Dump all data-* attrs of first element for debugging
-        const allData = i === 0
-          ? Object.fromEntries([...el.attributes].filter(a => a.name.startsWith('data-')).map(a => [a.name, a.value]))
-          : null;
+        // data-qid format: "<msgId>@<timestamp_ms>_<senderId>_<receiverId>"
+        const qid     = el.dataset.qid || '';
+        const qParts  = qid.includes('@') ? qid.split('@') : [];
+        const msgId   = qParts[0] || el.dataset.msgId || el.dataset.id || String(i);
+        const tsFromQid = qParts[1] ? qParts[1].split('_')[0] : '';
         return {
-          id:        el.dataset.msgId || el.dataset.id || String(i),
+          id:        msgId,
           content:   contentEl?.innerText?.trim() || el.innerText?.trim() || '',
           sender:    senderEl?.innerText?.trim()  || '',
-          timestamp: el.dataset.ts || el.dataset.time || el.dataset.msgTime ||
-                     el.dataset.sendDttm || el.dataset.clientTs || '',
-          timeText:  timeEl?.innerText?.trim() || timeEl?.getAttribute('title') || '',
+          timestamp: tsFromQid || '',
           fromMe:    el.className.includes('own') || el.className.includes('me') ||
                      el.dataset.fromMe === 'true',
-          _debug:    allData,
         };
       });
     }, SEL);
-    const first = raw.find(m => m._debug);
-    if (first) console.log('[getMessages] data-* attrs:', JSON.stringify(first._debug));
-    return raw.map(({ _debug, ...m }) => m);
   } catch (err) {
     console.error('[getMessages]', err.message);
     return [];
