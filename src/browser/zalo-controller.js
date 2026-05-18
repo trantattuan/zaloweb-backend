@@ -257,7 +257,7 @@ async function getChats() {
     await page.waitForSelector(SEL.chatList, { timeout: 5000 });
     return page.evaluate((sel) => {
       const items = [...document.querySelectorAll(sel.chatList)];
-      return items.slice(0, 50).map((el, i) => {
+      return items.slice(0, 15).map((el, i) => {
         const nameEl    = el.querySelector(sel.chatName);
         const avatarEl  = el.querySelector(sel.chatAvatar);
         const lastMsgEl = el.querySelector(sel.chatLastMsg);
@@ -305,7 +305,7 @@ async function getMessages(chatId) {
     await page.waitForSelector(SEL.messageItem, { timeout: 10000 });
     return page.evaluate((sel) => {
       const msgs = [...document.querySelectorAll(sel.messageItem)];
-      return msgs.slice(-100).map((el, i) => {
+      return msgs.slice(-10).map((el, i) => {
         const contentEl = el.querySelector(sel.msgContent);
         const senderEl  = el.querySelector(sel.msgSender);
         return {
