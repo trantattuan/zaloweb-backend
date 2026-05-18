@@ -290,9 +290,11 @@ async function getMessages(chatId) {
     }, { sel: SEL, id: chatId });
 
     if (!clicked) return [];
-    await page.waitForTimeout(1200);
+    // Chờ message area xuất hiện — thử scroll container trước rồi mới message frame
+    try { await page.waitForSelector('.message-view__scroll', { timeout: 3000 }); } catch {}
+    await page.waitForTimeout(1500);
 
-    await page.waitForSelector(SEL.messageItem, { timeout: 5000 });
+    await page.waitForSelector(SEL.messageItem, { timeout: 10000 });
     return page.evaluate((sel) => {
       const msgs = [...document.querySelectorAll(sel.messageItem)];
       return msgs.slice(-100).map((el, i) => {
