@@ -28,6 +28,7 @@ let browser = null;
 let context = null;
 let page    = null;
 let _io     = null;
+let _screenStreamInterval = null;
 
 async function initBrowser({ headless = false, io } = {}) {
   _io = io;
@@ -58,11 +59,46 @@ async function initBrowser({ headless = false, io } = {}) {
   return page;
 }
 
-/** Đăng nhập bằng số điện thoại và mật khẩu */
+// Stream ảnh browser về frontend (1 frame/s) để user xử lý CAPTCHA
+function _startScreenStream() {
+  if (_screenStreamInterval) return;
+  _screenStreamInterval = setInterval(async () => {
+    if (!page || !_io) return;
+    try {
+      const buf = await page.screenshot({ type: 'jpeg', quality: 65 });
+      const vp  = page.viewportSize() || { width: 1280, height: 720 };
+      _io.emit('page_screenshot', {
+        image: `data:image/jpeg;base64,${buf.toString('base64')}`,
+        width: vp.width,
+        height: vp.height,
+      });
+    } catch {}
+  }, 1000);
+}
+
+function _stopScreenStream() {
+  if (_screenStreamInterval) { clearInterval(_screenStreamInterval); _screenStreamInterval = null; }
+}
+
+/** Click tại tọa độ (x, y) trên trang — dùng để user giải CAPTCHA qua frontend */
+async function pageClick(x, y) {
+  if (!page) return;
+  await page.mouse.click(x, y);
+}
+
+/** Gõ text vào trang — forward từ frontend */
+async function pageType(text) {
+  if (!page) return;
+  await page.keyboard.type(text);
+}
+
+/** Đăng nhập bằng số điện thoại và mật khẩu.
+ *  - Trả về ngay (non-blocking): frontend lắng nghe socket logged_in / login_error.
+ *  - Stream screenshot để user giải CAPTCHA nếu cần.
+ */
 async function loginWithPhone(phone, password) {
   if (!page) throw new Error('Browser not initialized');
 
-  // Nếu đã đăng nhập sẵn → bỏ qua
   const alreadyIn = await _checkLoginState();
   if (alreadyIn) {
     const username = await _getUsername();
@@ -70,39 +106,56 @@ async function loginWithPhone(phone, password) {
     return;
   }
 
-  // Thử click tab "đăng nhập bằng mật khẩu" nếu có
+  // Bắt đầu stream ngay để user thấy trạng thái browser
+  _startScreenStream();
+
+  // Thử click tab phone (best-effort)
   try {
     const tab = await page.$(SEL.phoneLoginTab);
-    if (tab) { await tab.click(); await page.waitForTimeout(500); }
-  } catch { /* tab không tồn tại — form đã sẵn sàng */ }
+    if (tab) { await tab.click(); await page.waitForTimeout(600); }
+  } catch {}
 
-  // Điền số điện thoại
-  await page.waitForSelector(SEL.phoneInput, { timeout: 10000 });
-  await page.fill(SEL.phoneInput, phone);
-
-  // Điền mật khẩu
-  await page.waitForSelector(SEL.passwordInput, { timeout: 5000 });
-  await page.fill(SEL.passwordInput, password);
-
-  // Nhấn đăng nhập
-  await page.click(SEL.loginBtn);
-
-  // Chờ vào được giao diện chat
+  // Thử auto-fill (best-effort — nếu selector đúng)
   try {
-    await page.waitForSelector(SEL.chatList, { timeout: 20000 });
-  } catch {
-    // Kiểm tra có thông báo lỗi không
-    const errEl = await page.$(SEL.loginError);
-    const errMsg = errEl ? await errEl.innerText() : 'Đăng nhập thất bại';
-    throw new Error(errMsg.trim() || 'Đăng nhập thất bại — kiểm tra số điện thoại / mật khẩu');
+    const phoneEl = await page.$(SEL.phoneInput);
+    if (phoneEl) {
+      await phoneEl.fill(phone);
+      const passEl = await page.$(SEL.passwordInput);
+      if (passEl) {
+        await passEl.fill(password);
+        await page.click(SEL.loginBtn);
+        console.log('[login] auto-fill done — chờ login hoặc CAPTCHA');
+      }
+    } else {
+      console.log('[login] phone input không tìm thấy — user tương tác qua stream');
+    }
+  } catch (err) {
+    console.log('[login] auto-fill lỗi:', err.message, '— user tương tác qua stream');
   }
 
-  // Lưu session và báo frontend
-  const state = await context.storageState();
-  session.save(state);
-
-  const username = await _getUsername();
-  _io?.emit('logged_in', { username });
+  // Poll đến khi đăng nhập thành công (user giải CAPTCHA qua stream)
+  return new Promise((resolve, reject) => {
+    const maxWait = 300_000;
+    const checkMs =   2_000;
+    let elapsed   = 0;
+    const iv = setInterval(async () => {
+      elapsed += checkMs;
+      const ok = await _checkLoginState().catch(() => false);
+      if (ok) {
+        clearInterval(iv);
+        _stopScreenStream();
+        const state = await context.storageState();
+        session.save(state);
+        const username = await _getUsername();
+        _io?.emit('logged_in', { username });
+        resolve();
+      } else if (elapsed >= maxWait) {
+        clearInterval(iv);
+        _stopScreenStream();
+        reject(new Error('Login timeout — 5 phút không đăng nhập được'));
+      }
+    }, checkMs);
+  });
 }
 
 async function _checkLoginState() {
@@ -227,6 +280,8 @@ async function closeBrowser() {
 module.exports = {
   initBrowser,
   loginWithPhone,
+  pageClick,
+  pageType,
   getPage,
   isLoggedIn,
   getUsername,

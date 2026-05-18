@@ -33,26 +33,32 @@ app.get('/api/status', async (req, res) => {
 // Socket.io
 io.on('connection', (socket) => {
   console.log('[socket] client connected:', socket.id);
+  // Forward click/type từ frontend về Playwright (giải CAPTCHA)
+  socket.on('page_click', ({ x, y }) => controller.pageClick(x, y).catch(() => {}));
+  socket.on('page_type',  ({ text }) => controller.pageType(text).catch(() => {}));
   socket.on('disconnect', () => {
     console.log('[socket] client disconnected:', socket.id);
   });
 });
 
-// POST /api/auth/login — nhận số điện thoại và mật khẩu từ frontend
+// POST /api/auth/login — kick off login, trả về ngay để frontend bắt stream
 app.post('/api/auth/login', async (req, res) => {
   const { phone, password } = req.body;
   if (!phone || !password) {
     return res.status(400).json({ error: 'Thiếu số điện thoại hoặc mật khẩu' });
   }
-  try {
-    await controller.loginWithPhone(phone, password);
-    const page = await controller.getPage();
-    await watcher.startWatching(page, io);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[login] failed:', err.message);
-    res.status(401).json({ error: err.message });
-  }
+  res.json({ ok: true, streaming: true });
+
+  // Chạy nền — kết quả qua socket logged_in / login_error
+  controller.loginWithPhone(phone, password)
+    .then(async () => {
+      const page = await controller.getPage();
+      await watcher.startWatching(page, io);
+    })
+    .catch(err => {
+      console.error('[login] failed:', err.message);
+      io.emit('login_error', { error: err.message });
+    });
 });
 
 async function start() {
