@@ -23,14 +23,46 @@ app.use(express.json());
 app.use('/api/chats', chatRoutes);
 app.use('/api/send',  sendRoutes);
 
-// GET /api/debug/dom — trả về class names thực tế trong DOM Zalo để xác định selector
+// GET /api/debug/dom — class names thực tế trong DOM Zalo
 app.get('/api/debug/dom', async (req, res) => {
+  try { res.json(await controller.debugDOM()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/debug/dom/all — tất cả class names (không lọc keyword)
+app.get('/api/debug/dom/all', async (req, res) => {
   try {
-    const info = await controller.debugDOM();
+    const page = await controller.getPage();
+    const info = await page.evaluate(() => {
+      const all = new Set();
+      document.querySelectorAll('[class]').forEach(el =>
+        String(el.className).split(/\s+/).forEach(c => { if (c) all.add(c); })
+      );
+      return [...all].sort();
+    });
     res.json(info);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/debug/click/:index — click conv-item theo index rồi dump DOM
+app.get('/api/debug/click/:index', async (req, res) => {
+  try {
+    const page = await controller.getPage();
+    const idx  = Number(req.params.index);
+    await page.evaluate((i) => {
+      const items = document.querySelectorAll('.conv-item');
+      items[i]?.click();
+    }, idx);
+    await page.waitForTimeout(2000);
+    const info = await page.evaluate(() => {
+      const all = new Set();
+      document.querySelectorAll('[class]').forEach(el =>
+        String(el.className).split(/\s+/).forEach(c => { if (c) all.add(c); })
+      );
+      return [...all].sort();
+    });
+    res.json(info);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/status
