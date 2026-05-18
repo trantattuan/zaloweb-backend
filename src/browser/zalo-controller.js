@@ -14,9 +14,10 @@ const SEL = {
   chatName:     '.conv-item-title__name',
   chatAvatar:   '.conv-item__avatar img, .conversationList__avatar img',
   chatLastMsg:  '.z-conv-message__preview-message',
-  // Message thread (confirmed)
-  messageItem:  '.msg-item',
-  msgContent:   '.msg-item',
+  // Message thread (confirmed from /api/debug/click)
+  messageItem:  '.message-frame',
+  msgContent:   '.message-content-render',
+  msgSender:    '.message-sender-name-content',
   // Send input
   chatInput:    '.tds-conversation__footer-content [contenteditable="true"], div[contenteditable="true"]',
   // Username after login
@@ -295,20 +296,15 @@ async function getMessages(chatId) {
     return page.evaluate((sel) => {
       const msgs = [...document.querySelectorAll(sel.messageItem)];
       return msgs.slice(-100).map((el, i) => {
-        // Extract all visible text from the message element
-        const texts = [];
-        el.querySelectorAll('*').forEach(child => {
-          if (child.childElementCount === 0) {
-            const t = child.textContent?.trim();
-            if (t) texts.push(t);
-          }
-        });
+        const contentEl = el.querySelector(sel.msgContent);
+        const senderEl  = el.querySelector(sel.msgSender);
         return {
-          id:        el.dataset.msgId || String(i),
-          content:   texts.join(' ') || '',
-          sender:    '',
+          id:        el.dataset.msgId || el.dataset.id || String(i),
+          content:   contentEl?.innerText?.trim() || el.innerText?.trim() || '',
+          sender:    senderEl?.innerText?.trim()  || '',
           timestamp: el.dataset.ts || '',
-          fromMe:    el.className.includes('from-me') || el.dataset.fromMe === 'true',
+          fromMe:    el.className.includes('own') || el.className.includes('me') ||
+                     el.dataset.fromMe === 'true',
         };
       });
     }, SEL);
