@@ -197,7 +197,7 @@ async function getUsername() {
 
 // Thử nhiều selector, trả về selector đầu tiên tìm thấy >= minCount phần tử
 async function _findSelector(candidates, minCount = 2) {
-  return page.evaluate((sels, min) => {
+  return page.evaluate(({ sels, min }) => {
     for (const sel of sels) {
       try {
         const found = document.querySelectorAll(sel);
@@ -205,7 +205,7 @@ async function _findSelector(candidates, minCount = 2) {
       } catch {}
     }
     return null;
-  }, candidates, minCount);
+  }, { sels: candidates, min: minCount });
 }
 
 // Extract text từ tất cả leaf nodes của element
@@ -280,14 +280,14 @@ async function getMessages(chatId) {
   if (!page) return [];
   try {
     // Click the matching conversation item
-    const clicked = await page.evaluate((sel, id) => {
+    const clicked = await page.evaluate(({ sel, id }) => {
       const items = [...document.querySelectorAll(sel.chatList)];
       const target = items.find(el =>
         el.dataset.convId === id || el.dataset.uid === id
       ) || (!isNaN(Number(id)) ? items[Number(id)] : null);
       if (target) { target.click(); return true; }
       return false;
-    }, SEL, chatId);
+    }, { sel: SEL, id: chatId });
 
     if (!clicked) return [];
     await page.waitForTimeout(1200);
@@ -319,11 +319,11 @@ async function sendMessage(chatId, content) {
   if (!page) throw new Error('Browser not initialized');
 
   // Open the chat
-  await page.evaluate((sel, id) => {
+  await page.evaluate(({ sel, id }) => {
     const items = Array.from(document.querySelectorAll(sel.chatList));
     const target = items.find(el => el.dataset.convId === id || el.id === id);
     target?.click();
-  }, SEL, chatId);
+  }, { sel: SEL, id: chatId });
 
   await page.waitForSelector(SEL.chatInput, { timeout: 5000 });
   const input = await page.$(SEL.chatInput);
