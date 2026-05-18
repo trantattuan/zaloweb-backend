@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const session = require('./session');
 
-// Selectors — verify against live Zalo Web DOM (F12 → inspect)
+// Selectors — confirmed from live Zalo Web DOM via /api/debug/dom
 const SEL = {
   // Phone + password login form
   phoneLoginTab: '[class*="login-tab"][class*="phone"], [class*="phone-login"], a[class*="phone"]',
@@ -9,19 +9,18 @@ const SEL = {
   passwordInput: 'input[type="password"]',
   loginBtn:      'button[type="submit"], [class*="login-btn"], [class*="btn-login"], [class*="submit"]',
   loginError:    '[class*="error-msg"], [class*="invalid"], [class*="login-error"]',
-  // Logged-in chat interface
-  chatList:     '.conv-item, [class*="ConvItem"], [class*="conv-item"]',
-  chatName:     '[class*="conv-title"], [class*="ConvTitle"]',
-  chatAvatar:   '[class*="avatar"] img, [class*="Avatar"] img',
-  chatLastMsg:  '[class*="last-msg"], [class*="LastMsg"]',
-  // Message thread
-  messageItem:  '[class*="message-item"], [class*="MessageItem"]',
-  msgContent:   '[class*="msg-content"], [class*="MsgContent"]',
-  msgSender:    '[class*="msg-sender"], [class*="MsgSender"]',
+  // Logged-in chat interface (confirmed)
+  chatList:     '.conv-item',
+  chatName:     '.conv-item-title__name',
+  chatAvatar:   '.conv-item__avatar img, .conversationList__avatar img',
+  chatLastMsg:  '.z-conv-message__preview-message',
+  // Message thread (confirmed)
+  messageItem:  '.msg-item',
+  msgContent:   '.msg-item',
   // Send input
-  chatInput:    'div[contenteditable="true"][class*="input"], div[contenteditable="true"]',
+  chatInput:    '.tds-conversation__footer-content [contenteditable="true"], div[contenteditable="true"]',
   // Username after login
-  currentUser:  '[class*="profile-name"], [class*="ProfileName"]',
+  currentUser:  '[class*="profile-name"], [class*="ProfileName"], [class*="user-name"]',
 };
 
 let browser = null;
@@ -254,47 +253,21 @@ async function debugDOM() {
 async function getChats() {
   if (!page) return [];
   try {
-    const candidates = [
-      '[class*="conv-item"]', '[class*="ConvItem"]',
-      '[class*="chat-item"]',  '[class*="ChatItem"]',
-      '[class*="thread-item"]','[class*="contact-item"]',
-      '[class*="dialog-item"]','[class*="room-item"]',
-      'li[class*="item"]', '[data-conv-id]', '[data-chat-id]',
-    ];
-    const sel = await _findSelector(candidates, 2);
-    if (!sel) {
-      console.warn('[getChats] no selector matched — call /api/debug/dom to inspect');
-      return [];
-    }
-    console.log('[getChats] using selector:', sel);
-
-    return page.evaluate((s) => {
-      const items = [...document.querySelectorAll(s)];
-
-      function leafTexts(el) {
-        const texts = [];
-        el.querySelectorAll('*').forEach(child => {
-          if (child.childElementCount === 0) {
-            const t = child.textContent?.trim();
-            if (t && t.length > 0 && t.length < 120) texts.push(t);
-          }
-        });
-        return texts;
-      }
-
+    await page.waitForSelector(SEL.chatList, { timeout: 5000 });
+    return page.evaluate((sel) => {
+      const items = [...document.querySelectorAll(sel.chatList)];
       return items.slice(0, 50).map((el, i) => {
-        const texts  = leafTexts(el);
-        const img    = el.querySelector('img');
-        const dataId = el.dataset.convId || el.dataset.chatId ||
-                       el.dataset.id    || el.dataset.uid    || '';
+        const nameEl    = el.querySelector(sel.chatName);
+        const avatarEl  = el.querySelector(sel.chatAvatar);
+        const lastMsgEl = el.querySelector(sel.chatLastMsg);
         return {
-          id:          dataId || String(i),
-          name:        texts[0] || `Chat ${i + 1}`,
-          lastMessage: texts[1] || '',
-          avatar:      img?.src || '',
+          id:          el.dataset.convId || el.dataset.uid || String(i),
+          name:        nameEl?.textContent?.trim()    || `Chat ${i + 1}`,
+          avatar:      avatarEl?.src                  || '',
+          lastMessage: lastMsgEl?.textContent?.trim() || '',
         };
       });
-    }, sel);
+    }, SEL);
   } catch (err) {
     console.error('[getChats]', err.message);
     return [];
@@ -305,58 +278,40 @@ async function getChats() {
 async function getMessages(chatId) {
   if (!page) return [];
   try {
-    const listCandidates = [
-      '[class*="conv-item"]', '[class*="ConvItem"]',
-      '[class*="chat-item"]',  '[class*="ChatItem"]',
-      '[class*="thread-item"]','[class*="contact-item"]',
-      'li[class*="item"]', '[data-conv-id]',
-    ];
     // Click the matching conversation item
-    const clicked = await page.evaluate((sels, id) => {
-      for (const sel of sels) {
-        const items = [...document.querySelectorAll(sel)];
-        if (!items.length) continue;
-        const target = items.find(el =>
-          el.dataset.convId === id || el.dataset.chatId === id ||
-          el.dataset.id    === id || el.dataset.uid   === id
-        ) || (!isNaN(Number(id)) ? items[Number(id)] : null);
-        if (target) { target.click(); return true; }
-      }
+    const clicked = await page.evaluate((sel, id) => {
+      const items = [...document.querySelectorAll(sel.chatList)];
+      const target = items.find(el =>
+        el.dataset.convId === id || el.dataset.uid === id
+      ) || (!isNaN(Number(id)) ? items[Number(id)] : null);
+      if (target) { target.click(); return true; }
       return false;
-    }, listCandidates, chatId);
+    }, SEL, chatId);
 
     if (!clicked) return [];
     await page.waitForTimeout(1200);
 
-    const msgCandidates = [
-      '[class*="message-item"]', '[class*="MessageItem"]',
-      '[class*="msg-item"]',     '[class*="MsgItem"]',
-      '[class*="chat-message"]', '[class*="ChatMessage"]',
-      '[class*="message"]',      '[class*="bubble"]',
-    ];
-    const msgSel = await _findSelector(msgCandidates, 1);
-    if (!msgSel) return [];
-
-    return page.evaluate((s) => {
-      function leafTexts(el) {
+    await page.waitForSelector(SEL.messageItem, { timeout: 5000 });
+    return page.evaluate((sel) => {
+      const msgs = [...document.querySelectorAll(sel.messageItem)];
+      return msgs.slice(-100).map((el, i) => {
+        // Extract all visible text from the message element
         const texts = [];
         el.querySelectorAll('*').forEach(child => {
           if (child.childElementCount === 0) {
             const t = child.textContent?.trim();
-            if (t && t.length > 0) texts.push(t);
+            if (t) texts.push(t);
           }
         });
-        return texts;
-      }
-      const msgs = [...document.querySelectorAll(s)];
-      return msgs.slice(-100).map((el, i) => ({
-        id:        el.dataset.msgId || String(i),
-        content:   leafTexts(el).join(' ') || '',
-        sender:    '',
-        timestamp: el.dataset.ts || '',
-        fromMe:    el.className.includes('from-me') || el.dataset.fromMe === 'true',
-      }));
-    }, msgSel);
+        return {
+          id:        el.dataset.msgId || String(i),
+          content:   texts.join(' ') || '',
+          sender:    '',
+          timestamp: el.dataset.ts || '',
+          fromMe:    el.className.includes('from-me') || el.dataset.fromMe === 'true',
+        };
+      });
+    }, SEL);
   } catch (err) {
     console.error('[getMessages]', err.message);
     return [];
