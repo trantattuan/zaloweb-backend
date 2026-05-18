@@ -23,6 +23,16 @@ app.use(express.json());
 app.use('/api/chats', chatRoutes);
 app.use('/api/send',  sendRoutes);
 
+// GET /api/debug/dom — trả về class names thực tế trong DOM Zalo để xác định selector
+app.get('/api/debug/dom', async (req, res) => {
+  try {
+    const info = await controller.debugDOM();
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/status
 app.get('/api/status', async (req, res) => {
   const loggedIn = await controller.isLoggedIn();

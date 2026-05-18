@@ -195,26 +195,108 @@ async function getUsername() {
   return _getUsername();
 }
 
+// Thử nhiều selector, trả về selector đầu tiên tìm thấy >= minCount phần tử
+async function _findSelector(candidates, minCount = 2) {
+  return page.evaluate((sels, min) => {
+    for (const sel of sels) {
+      try {
+        const found = document.querySelectorAll(sel);
+        if (found.length >= min) return sel;
+      } catch {}
+    }
+    return null;
+  }, candidates, minCount);
+}
+
+// Extract text từ tất cả leaf nodes của element
+function _leafTexts(el) {
+  const texts = [];
+  el.querySelectorAll('*').forEach(child => {
+    if (child.childElementCount === 0) {
+      const t = child.textContent?.trim();
+      if (t && t.length > 0 && t.length < 120) texts.push(t);
+    }
+  });
+  return texts;
+}
+
+/** Debug: trả về class names thực tế trong DOM để xác định selector đúng */
+async function debugDOM() {
+  if (!page) return {};
+  return page.evaluate(() => {
+    const relevantClasses = new Set();
+    document.querySelectorAll('[class]').forEach(el => {
+      String(el.className).split(/\s+/).forEach(c => {
+        if (!c) return;
+        const lc = c.toLowerCase();
+        if (['conv', 'chat', 'msg', 'list', 'item', 'contact', 'thread',
+             'dialog', 'room', 'sidebar', 'message', 'bubble'].some(kw => lc.includes(kw))) {
+          relevantClasses.add(c);
+        }
+      });
+    });
+    const lis = document.querySelectorAll('li');
+    return {
+      url: window.location.href,
+      relevantClasses: [...relevantClasses].sort(),
+      liSample: [...lis].slice(0, 5).map(li => ({
+        class: li.className,
+        dataAttrs: [...li.attributes]
+          .filter(a => a.name.startsWith('data-'))
+          .map(a => `${a.name}=${a.value}`),
+        text: li.innerText?.slice(0, 80),
+      })),
+    };
+  });
+}
+
 /** Read chat list from sidebar DOM */
 async function getChats() {
   if (!page) return [];
   try {
-    await page.waitForSelector(SEL.chatList, { timeout: 5000 });
-    return page.evaluate((sel) => {
-      const items = Array.from(document.querySelectorAll(sel.chatList));
+    const candidates = [
+      '[class*="conv-item"]', '[class*="ConvItem"]',
+      '[class*="chat-item"]',  '[class*="ChatItem"]',
+      '[class*="thread-item"]','[class*="contact-item"]',
+      '[class*="dialog-item"]','[class*="room-item"]',
+      'li[class*="item"]', '[data-conv-id]', '[data-chat-id]',
+    ];
+    const sel = await _findSelector(candidates, 2);
+    if (!sel) {
+      console.warn('[getChats] no selector matched — call /api/debug/dom to inspect');
+      return [];
+    }
+    console.log('[getChats] using selector:', sel);
+
+    return page.evaluate((s) => {
+      const items = [...document.querySelectorAll(s)];
+
+      function leafTexts(el) {
+        const texts = [];
+        el.querySelectorAll('*').forEach(child => {
+          if (child.childElementCount === 0) {
+            const t = child.textContent?.trim();
+            if (t && t.length > 0 && t.length < 120) texts.push(t);
+          }
+        });
+        return texts;
+      }
+
       return items.slice(0, 50).map((el, i) => {
-        const nameEl    = el.querySelector(sel.chatName);
-        const avatarEl  = el.querySelector(sel.chatAvatar);
-        const lastMsgEl = el.querySelector(sel.chatLastMsg);
+        const texts  = leafTexts(el);
+        const img    = el.querySelector('img');
+        const dataId = el.dataset.convId || el.dataset.chatId ||
+                       el.dataset.id    || el.dataset.uid    || '';
         return {
-          id:          el.dataset.convId || el.id || String(i),
-          name:        nameEl?.textContent?.trim()   || '',
-          avatar:      avatarEl?.src                 || '',
-          lastMessage: lastMsgEl?.textContent?.trim() || '',
+          id:          dataId || String(i),
+          name:        texts[0] || `Chat ${i + 1}`,
+          lastMessage: texts[1] || '',
+          avatar:      img?.src || '',
         };
       });
-    }, SEL);
-  } catch {
+    }, sel);
+  } catch (err) {
+    console.error('[getChats]', err.message);
     return [];
   }
 }
@@ -223,33 +305,60 @@ async function getChats() {
 async function getMessages(chatId) {
   if (!page) return [];
   try {
-    // Click the chat item matching chatId
-    const clicked = await page.evaluate((sel, id) => {
-      const items = Array.from(document.querySelectorAll(sel.chatList));
-      const target = items.find(el => el.dataset.convId === id || el.id === id);
-      if (target) { target.click(); return true; }
+    const listCandidates = [
+      '[class*="conv-item"]', '[class*="ConvItem"]',
+      '[class*="chat-item"]',  '[class*="ChatItem"]',
+      '[class*="thread-item"]','[class*="contact-item"]',
+      'li[class*="item"]', '[data-conv-id]',
+    ];
+    // Click the matching conversation item
+    const clicked = await page.evaluate((sels, id) => {
+      for (const sel of sels) {
+        const items = [...document.querySelectorAll(sel)];
+        if (!items.length) continue;
+        const target = items.find(el =>
+          el.dataset.convId === id || el.dataset.chatId === id ||
+          el.dataset.id    === id || el.dataset.uid   === id
+        ) || (!isNaN(Number(id)) ? items[Number(id)] : null);
+        if (target) { target.click(); return true; }
+      }
       return false;
-    }, SEL, chatId);
+    }, listCandidates, chatId);
 
     if (!clicked) return [];
+    await page.waitForTimeout(1200);
 
-    await page.waitForSelector(SEL.messageItem, { timeout: 5000 });
+    const msgCandidates = [
+      '[class*="message-item"]', '[class*="MessageItem"]',
+      '[class*="msg-item"]',     '[class*="MsgItem"]',
+      '[class*="chat-message"]', '[class*="ChatMessage"]',
+      '[class*="message"]',      '[class*="bubble"]',
+    ];
+    const msgSel = await _findSelector(msgCandidates, 1);
+    if (!msgSel) return [];
 
-    return page.evaluate((sel) => {
-      const msgs = Array.from(document.querySelectorAll(sel.messageItem));
-      return msgs.slice(-100).map((el, i) => {
-        const contentEl = el.querySelector(sel.msgContent);
-        const senderEl  = el.querySelector(sel.msgSender);
-        return {
-          id:        el.dataset.msgId || String(i),
-          content:   contentEl?.textContent?.trim() || '',
-          sender:    senderEl?.textContent?.trim()  || '',
-          timestamp: el.dataset.ts || '',
-          fromMe:    el.classList.contains('from-me') || el.dataset.fromMe === 'true',
-        };
-      });
-    }, SEL);
-  } catch {
+    return page.evaluate((s) => {
+      function leafTexts(el) {
+        const texts = [];
+        el.querySelectorAll('*').forEach(child => {
+          if (child.childElementCount === 0) {
+            const t = child.textContent?.trim();
+            if (t && t.length > 0) texts.push(t);
+          }
+        });
+        return texts;
+      }
+      const msgs = [...document.querySelectorAll(s)];
+      return msgs.slice(-100).map((el, i) => ({
+        id:        el.dataset.msgId || String(i),
+        content:   leafTexts(el).join(' ') || '',
+        sender:    '',
+        timestamp: el.dataset.ts || '',
+        fromMe:    el.className.includes('from-me') || el.dataset.fromMe === 'true',
+      }));
+    }, msgSel);
+  } catch (err) {
+    console.error('[getMessages]', err.message);
     return [];
   }
 }
@@ -289,6 +398,7 @@ module.exports = {
   pageClick,
   pageType,
   pageKey,
+  debugDOM,
   getPage,
   isLoggedIn,
   getUsername,
