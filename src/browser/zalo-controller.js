@@ -18,8 +18,8 @@ const SEL = {
   messageItem:  '.message-frame',
   msgContent:   '.message-content-render',
   msgSender:    '.message-sender-name-content',
-  // Send input
-  chatInput:    '.tds-conversation__footer-content [contenteditable="true"], div[contenteditable="true"]',
+  // Send input — match any contenteditable value (true / plaintext-only / etc.)
+  chatInput:    '.tds-conversation__footer-content [contenteditable], [contenteditable="plaintext-only"], [contenteditable="true"]',
   // Username after login
   currentUser:  '[class*="profile-name"], [class*="ProfileName"], [class*="user-name"]',
 };
@@ -392,12 +392,29 @@ async function sendMessage(chatId, content) {
     }, { sel: SEL, id: chatId });
   }
 
-  await page.waitForTimeout(1000);
+  // Wait for chat panel to load before seeking input
+  try { await page.waitForSelector('.message-view__scroll', { timeout: 5000 }); } catch {}
+  await page.waitForTimeout(500);
+
   console.log('[sendMessage] waiting for chat input...');
   try {
-    await page.waitForSelector(SEL.chatInput, { timeout: 8000 });
+    await page.waitForSelector(SEL.chatInput, { timeout: 12000 });
   } catch {
-    throw new Error('Không tìm thấy ô nhập tin nhắn — hội thoại này có thể là kênh chỉ đọc');
+    // Screenshot for diagnosis
+    try {
+      const buf = await page.screenshot({ type: 'jpeg', quality: 60 });
+      require('fs').writeFileSync('/tmp/send_fail.jpg', buf);
+      console.log('[sendMessage] screenshot saved to /tmp/send_fail.jpg');
+    } catch {}
+    // Log all contenteditable elements found
+    const ces = await page.evaluate(() =>
+      [...document.querySelectorAll('[contenteditable]')].map(e => ({
+        tag: e.tagName, ce: e.getAttribute('contenteditable'),
+        cls: e.className?.slice?.(0, 60), visible: e.offsetHeight > 0,
+      }))
+    ).catch(() => []);
+    console.log('[sendMessage] contenteditable elements:', JSON.stringify(ces));
+    throw new Error('Không tìm thấy ô nhập tin nhắn — có thể là kênh chỉ đọc');
   }
 
   const input = page.locator(SEL.chatInput).first();
