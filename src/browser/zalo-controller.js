@@ -18,8 +18,8 @@ const SEL = {
   messageItem:  '.message-frame',
   msgContent:   '.message-content-render',
   msgSender:    '.message-sender-name-content',
-  // Send input — match any contenteditable value (true / plaintext-only / etc.)
-  chatInput:    '.tds-conversation__footer-content [contenteditable], [contenteditable="plaintext-only"], [contenteditable="true"]',
+  // Send input — Zalo uses class "rich-input" with contenteditable="false" initially
+  chatInput:    '[class*="rich-input"], .tds-conversation__footer-content [contenteditable], [contenteditable="true"]',
   // Username after login
   currentUser:  '[class*="profile-name"], [class*="ProfileName"], [class*="user-name"]',
 };
@@ -417,10 +417,18 @@ async function sendMessage(chatId, content) {
     throw new Error('Không tìm thấy ô nhập tin nhắn — có thể là kênh chỉ đọc');
   }
 
-  const input = page.locator(SEL.chatInput).first();
-  await input.click();
-  await input.fill(content);
-  console.log('[sendMessage] content filled, pressing Enter...');
+  // Click rich-input to activate Zalo's JS handler (contenteditable="false" → active)
+  const input = page.locator('[class*="rich-input"]').first();
+  const hasRich = await input.count() > 0;
+  if (hasRich) {
+    await input.click();
+  } else {
+    await page.locator(SEL.chatInput).first().click();
+  }
+  await page.waitForTimeout(200);
+  // keyboard.type() works even when contenteditable="false" — dispatches key events
+  await page.keyboard.type(content);
+  console.log('[sendMessage] content typed, pressing Enter...');
   await page.keyboard.press('Enter');
   console.log('[sendMessage] done');
 
